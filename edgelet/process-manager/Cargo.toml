@@ -1,0 +1,23 @@
+[package]
+name = "process-manager"
+version = "0.1.0"
+authors = ["Azure IoT Edge Devs"]
+edition = "2018"
+
+[dependencies]
+clap = "2.31"
+failure = "0.1"
+futures = "0.1"
+nix = "*"
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
+tokio = "0.1"
+crossbeam = "*"
+
+edgelet-core = { path = "../edgelet-core" }
+
+[dependencies.rustbreak]
+version = "1"
+default-features = false
+features = ["yaml"]
