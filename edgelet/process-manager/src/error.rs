@@ -18,6 +18,8 @@ pub enum ErrorKind {
     DbOpen,
     #[fail(display = "Could not load database")]
     DbLoad,
+    #[fail(display = "Could not load database")]
+    DbLock,
     #[fail(display = "Could not insert new item to database")]
     DbInsert,
     #[fail(display = "Could not write database")]

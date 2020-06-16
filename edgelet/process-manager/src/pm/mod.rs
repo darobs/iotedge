@@ -98,7 +98,14 @@ impl Command for PM {
             thread::spawn(move || {
                 runner::control_loop(m2_name, db.clone(), control_rx, response_send)
             });
-
+            loop {
+                match response_rx.recv() {
+                    Ok(ControlResponse::Stopped) => {
+                        break;
+                    }
+                    _ => panic!("Error receiving a ResultMsg."),
+                }
+            }
             Ok(())
         }))
         // Set up 1 or two long running processes.
