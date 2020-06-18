@@ -1,74 +1,147 @@
+use std::fs::File;
 use std::sync::Arc;
-use std::{thread, time};
-//use tokio::process::Command;
+
 use super::program_data::{ModuleSpec, Status};
 use super::{ControlMessage, ControlResponse, DB};
 use crate::error::{Error, ErrorKind};
 
-use crossbeam::crossbeam_channel::{Receiver, SendError, Sender};
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::Pid;
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc;
+use tokio::time;
+
 use nix::unistd::{fork, ForkResult};
 
-fn start_process(spec: ModuleSpec) -> Result<ModuleSpec, Error> {
-    // let outputs = File::create("out.txt")?;
-    // let errors = outputs.try_clone()?;// Command::new("ls")
-    //     .args(&[".", "oops"])
-    //     .stdout(Stdio::from(outputs))
-    //     .stderr(Stdio::from(errors))
-    match fork() {
-        Ok(ForkResult::Parent { child, .. }) => {
-            println!(
-                "Continuing execution in parent process, new child has pid: {}",
-                child
-            );
-            Ok(spec.with_status(Status::new(Some(child.as_raw() as u32), None)))
-        }
-        Ok(ForkResult::Child) => {
-            println!("I'm a new child process");
-            std::process::exit(0_i32);
-            Err(Error::from(ErrorKind::ForkFailed))
-        }
-        Err(_) => Err(Error::from(ErrorKind::ForkFailed)),
+fn start_process(spec: &ModuleSpec) -> Result<Child, Error> {
+    //tokio command returns a result of a ChildFuture
+    let settings = spec.config().settings();
+    // where should the files and paths be cooked?
+    // see tokio::fs::canonicalize
+    let mut cmd = Command::new(settings.exe());
+    cmd.current_dir(settings.working_directory());
+    if let Some(cmd_args) = settings.exe_args() {
+        cmd.args(cmd_args);
+    }
+    if let Some(args) = settings.args() {
+        cmd.args(args);
+    }
+    // if let Some(user) = settings.user() {
+    //     //look up userid or convert to int.
+    //     cmd.user(user);
+    // }
+    // if let Some(group) = settings.group() {
+    //     //look up userid or convert to int.
+    //     cmd.group(group);
+    // }
+
+    if let Some(stderr) = settings.stderr_log() {
+        let file = File::create(stderr).map_err(|_| Error::from(ErrorKind::FileOpen))?;
+        cmd.stderr(file);
+    }
+    if let Some(stdout) = settings.stdout_log() {
+        let file = File::create(stdout).map_err(|_| Error::from(ErrorKind::FileOpen))?;
+        cmd.stdout(file);
+    }
+    cmd.spawn().map_err(|_| Error::from(ErrorKind::ForkFailed))
+}
+
+fn kill_process(spec: &ModuleSpec) {
+    if let Some(pid) = spec.status().and_then(|status| status.pid()) {
+        let nix_pid = Pid::from_raw(*pid as i32);
+        kill(nix_pid, Signal::SIGTERM).unwrap_or_else(|_e| {
+            println!("kill failed");
+        });
     }
 }
 
-pub fn control_loop(
+fn db_update(db: Arc<DB>, module_name: String, spec: &ModuleSpec) -> Result<(), Error> {
+    {
+        let mut lock = db.lock().map_err(|_| Error::from(ErrorKind::DbLock))?;
+        lock.insert(&module_name, spec)
+            .map_err(|_| Error::from(ErrorKind::DbInsert))?;
+    }
+    db.flush().map_err(|_| Error::from(ErrorKind::DbFlush))
+}
+
+pub async fn control_loop(
     module_name: String,
     db: Arc<DB>,
-    control_rx: Receiver<ControlMessage>,
-    response: Sender<ControlResponse>,
+    mut control_rx: mpsc::Receiver<ControlMessage>,
+    mut response: mpsc::Sender<ControlResponse>,
 ) {
-    let mut loop_count = 0;
+    let mut restart_count = 0;
+    // loop until module is removed
     loop {
-        let spec = db
+        // Get database entry for module.
+        let spec: Result<ModuleSpec, _> = db
             .retrieve(&module_name)
             .map_err(|err| Error::from(ErrorKind::DbRetrieve));
         if let Ok(spec) = spec {
-            let spec = start_process(spec).and_then(|spec| {
-                let mut lock = db.lock().map_err(|_| Error::from(ErrorKind::DbLock))?;
-                lock.insert(&module_name, spec)
-                    .map_err(|_| Error::from(ErrorKind::DbInsert))
-            });
-            if let Ok(_) = spec {
-                db.flush().map_err(|_| Error::from(ErrorKind::DbFlush));
+            // fork, setup and exec process
+            if None == spec.status().and_then(|status| status.pid()) {
+                println!("Starting Module {}", module_name);
+                // If child process doesn't exists, end it.
+                //Hold off here, for now increment restart_count
+                restart_count += 1;
+                let result = start_process(&spec);
+                match result {
+                    Ok(child) => {
+                        let spec = spec.with_status(Status::new(Some(child.id()), None));
+                        // save Started status & pid in database.
+                        db_update(db.clone(), module_name.to_string(), &spec)
+                            .expect("Write to database failed");
+                        let db = db.clone();
+                        let module_name = module_name.to_string();
+                        // This is a join handle here. How do I wait on the Child
+                        tokio::spawn(async {
+                            let status = child.await.expect("child process encountered an error");
+                            let spec = spec.with_status(Status::new(None, status.code()));
+                            db_update(db, module_name, &spec).expect("Write to database failed");
+                            println!("child status was: {}", status);
+                        });
+                    }
+                    Err(e) => {
+                        println!("Process failed to start {}", e);
+                        let db = db.clone();
+                        let spec = spec.with_status(Status::new(None, None));
+                        db_update(db, module_name.to_string(), &spec)
+                            .expect("Write to database failed");
+                    }
+                }
             }
         } else {
             println!("Failed to retrieve module");
         }
 
-        loop_count += 1;
-        if loop_count > 10 {
+        if restart_count > 10 {
             break;
         }
-        let default_pause = time::Duration::from_secs(5);
-        thread::sleep(default_pause);
-    }
-    response.send(ControlResponse::Stopped);
 
-    // loop until module is removed
-    // Get database entry for module.
-    // fork, setup and exec process
-    // save Started status & pid in database.
-    // Wait on PID or channel update.
-    // If child process ends, restart it.
-    // If channel
+        // Wait on PID or channel update.
+        match control_rx.try_recv() {
+            Ok(msg) => {
+                println!("Module {} recoved a control message", module_name);
+                let spec: Result<ModuleSpec, _> = db
+                    .retrieve(&module_name)
+                    .map_err(|err| Error::from(ErrorKind::DbRetrieve));
+                if let Ok(spec) = spec {
+                    kill_process(&spec);
+                }
+                break;
+            }
+            Err(mpsc::error::TryRecvError::Closed) => {
+                println!("Module {} has a closed control channel", module_name);
+                break;
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+        };
+
+        time::delay_for(time::Duration::from_secs(1)).await;
+    }
+    response
+        .send(ControlResponse::Stopped(module_name))
+        .await
+        .map_err(|_| Error::from(ErrorKind::InitializeTokio))
+        .expect("send failed");
 }

@@ -12,8 +12,8 @@ pub struct Error {
 
 #[derive(Clone, Debug, Fail)]
 pub enum ErrorKind {
-    #[fail(display = "Invalid value for --host parameter")]
-    BadHostParameter,
+    #[fail(display = "Unknown command")]
+    UnknownCommand,
     #[fail(display = "Could not open database file")]
     DbOpen,
     #[fail(display = "Could not load database")]
@@ -30,6 +30,8 @@ pub enum ErrorKind {
     InitializeTokio,
     #[fail(display = "Could not Fork")]
     ForkFailed,
+    #[fail(display = "Could not open file")]
+    FileOpen,
 }
 
 impl Fail for Error {

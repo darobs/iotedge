@@ -1,16 +1,14 @@
-use std::process;
 use std::path::PathBuf;
 
+use async_trait::async_trait;
 use clap::{crate_description, crate_name, App, AppSettings, Arg, SubCommand};
-use failure::{Fail, ResultExt};
-use futures::Future;
+use failure::Fail;
 
 use crate::error::Error;
 
+#[async_trait]
 pub trait Command {
-    type Future: Future<Item = ()> + Send;
-
-    fn execute(self) -> Self::Future;
+    async fn execute(self) -> Result<(), Error>;
 }
 
 mod error;
@@ -18,8 +16,9 @@ mod pm;
 mod unknown;
 mod version;
 
-fn main() {
-    if let Err(ref error) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(ref error) = run().await {
         let fail: &dyn Fail = error;
 
         eprintln!("{}", error.to_string());
@@ -27,15 +26,12 @@ fn main() {
         for cause in fail.iter_causes() {
             eprintln!("\tcaused by: {}", cause);
         }
-
         eprintln!();
-
-        process::exit(1);
-    }
+    };
 }
 
 #[allow(clippy::too_many_lines)]
-fn run() -> Result<(), Error> {
+async fn run() -> Result<(), Error> {
     let mut default_working_dir: PathBuf =
         std::env::current_dir().map_or_else(|_| r"/tmp".into(), Into::into);
     default_working_dir.push("process-manager");
@@ -60,15 +56,11 @@ fn run() -> Result<(), Error> {
         .subcommand(SubCommand::with_name("version").about("Show the version information"))
         .get_matches();
 
-    let mut tokio_runtime = tokio::runtime::Runtime::new().context(error::ErrorKind::InitializeTokio)?;
-
     let workdir = matches.value_of("workdir").unwrap();
 
     match matches.subcommand() {
-        ("run", _) => tokio_runtime.block_on(pm::PM::new(workdir.to_string()).execute()),
-        ("version", _) => tokio_runtime.block_on(version::Version::new().execute()),
-        (command, _) => {
-            tokio_runtime.block_on(unknown::Unknown::new(command.to_string()).execute())
-        }
+        ("run", _) => pm::PM::new(workdir.to_string()).execute().await,
+        ("version", _) => version::Version::new().execute().await,
+        (command, _) => unknown::Unknown::new(command.to_string()).execute().await,
     }
 }

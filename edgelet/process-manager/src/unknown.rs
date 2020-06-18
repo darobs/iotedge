@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-use futures::future::{self, FutureResult};
+use async_trait::async_trait;
 
-use crate::error::Error;
+use crate::error::{Error, ErrorKind};
 use crate::Command;
 
 pub struct Unknown {
@@ -15,11 +15,10 @@ impl Unknown {
     }
 }
 
+#[async_trait]
 impl Command for Unknown {
-    type Future = FutureResult<(), Error>;
-
-    fn execute(self) -> Self::Future {
+    async fn execute(self) -> Result<(), Error> {
         eprintln!("unknown command: {}", self.command);
-        future::ok(())
+        Err(Error::from(ErrorKind::UnknownCommand))
     }
 }

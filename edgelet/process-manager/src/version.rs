@@ -1,8 +1,7 @@
 // Copyright (c) Microsoft. All rights reserved.
 
+use async_trait::async_trait;
 use clap::crate_name;
-
-use futures::future::{self, FutureResult};
 
 use crate::error::Error;
 use crate::Command;
@@ -16,16 +15,15 @@ impl Version {
     }
 }
 
+#[async_trait]
 impl Command for Version {
-    type Future = FutureResult<(), Error>;
-
     #[allow(clippy::print_literal)]
-    fn execute(self) -> Self::Future {
+    async fn execute(self) -> Result<(), Error> {
         println!(
             "{} {}",
             crate_name!(),
             edgelet_core::version_with_source_version(),
         );
-        future::ok(())
+        Ok(())
     }
 }
