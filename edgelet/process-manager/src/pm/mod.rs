@@ -23,7 +23,6 @@ pub struct PM {
 
 pub enum ControlMessage {
     Stop,
-    Exit,
 }
 
 pub enum ControlResponse {
@@ -45,7 +44,7 @@ impl PM {
 
         println!("Openinf db from {:?}", db_path);
         // Create a database in the workdir path
-        DB::open(db_path).map_err(|err| Error::from(ErrorKind::DbOpen))
+        DB::open(db_path).map_err(|_err| Error::from(ErrorKind::DbOpen))
     }
 
     fn build_database(&self, db: &DB) -> Result<Vec<String>, Error> {
@@ -63,22 +62,25 @@ impl PM {
         let c1 = program_data::Config::new(Some(vec![e1]), p1);
         let m1 = program_data::ModuleSpec::new(m1_name.clone(), c1);
         db.insert(&m1_name, m1)
-            .map_err(|err| Error::from(ErrorKind::DbInsert))?;
+            .map_err(|_err| Error::from(ErrorKind::DbInsert))?;
 
         let m2_name = "module2".to_string();
         let p2 = program_data::ProcessParameters::new(
             vec!["/bin/bash".to_string()],
             vec![
                 "-c".to_string(),
-                "while true; do date; sleep 10; done".to_string(),
+                "while true; do echo $A; id; date; sleep 10; done".to_string(),
             ],
             "/tmp".to_string(),
-        );
-        let c2 = program_data::Config::new(None, p2);
+        )
+        .with_user(Some("Dave".to_string()))
+        .with_group(Some("20".to_string()));
+        let e2 = program_data::EnvVar::new("A".to_string(), "EnvValue".to_string());
+        let c2 = program_data::Config::new(Some(vec![e2]), p2);
         let m2 = program_data::ModuleSpec::new(m2_name.clone(), c2);
         db.insert(&m2_name, m2)
-            .map_err(|err| Error::from(ErrorKind::DbInsert))?;
-        db.flush().map_err(|err| Error::from(ErrorKind::DbFlush))?;
+            .map_err(|_err| Error::from(ErrorKind::DbInsert))?;
+        db.flush().map_err(|_err| Error::from(ErrorKind::DbFlush))?;
         Ok(vec![m1_name, m2_name])
     }
 }
@@ -96,10 +98,8 @@ impl Command for PM {
         let (response_send, mut response_rx) = sync::mpsc::channel(1);
         let mut send_channels = Vec::new();
         for module in modules {
-            let module_spec: program_data::ModuleSpec = db
-                .retrieve(&module)
-                .map_err(|err| Error::from(ErrorKind::DbRetrieve))?;
-            let (mut control_send, mut control_rx) = sync::mpsc::channel(2);
+            println!("Starting module: {}", module);
+            let (control_send, control_rx) = sync::mpsc::channel(2);
             send_channels.push(control_send);
             tokio::spawn(runner::control_loop(
                 module.to_string(),
@@ -123,8 +123,8 @@ impl Command for PM {
                 _ => panic!("Error receiving a ResultMsg."),
             }
             if modules_running == 1 {
-                println!("Only one module left, waiting 1 sec and killing the last");
-                time::delay_for(time::Duration::from_secs(1)).await;
+                println!("Only one module left, waiting 5 sec and killing the last");
+                time::delay_for(time::Duration::from_secs(5)).await;
                 for ch in send_channels.iter_mut() {
                     ch.send(ControlMessage::Stop).await.unwrap_or_else(|e| {
                         println!("Attempt to stop chanel: {}", e);

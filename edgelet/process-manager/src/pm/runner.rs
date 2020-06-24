@@ -10,8 +10,29 @@ use nix::unistd::Pid;
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::time;
+use users::{get_group_by_name, get_user_by_name};
 
-use nix::unistd::{fork, ForkResult};
+fn lookup_uid(uid: Option<&str>) -> Option<u32> {
+    // could be a non-zero integer
+    uid.and_then(|u_str| {
+        u_str
+            .parse::<u32>()
+            .ok()
+            .map(|uid_t| Some(uid_t))
+            .unwrap_or_else(|| get_user_by_name(u_str).map(|user| user.uid()))
+    })
+}
+
+fn lookup_gid(gid: Option<&str>) -> Option<u32> {
+    // could be a non-zero integer
+    gid.and_then(|g_str| {
+        g_str
+            .parse::<u32>()
+            .ok()
+            .map(|gid_t| Some(gid_t))
+            .unwrap_or_else(|| get_group_by_name(g_str).map(|group| group.gid()))
+    })
+}
 
 fn start_process(spec: &ModuleSpec) -> Result<Child, Error> {
     //tokio command returns a result of a ChildFuture
@@ -26,15 +47,19 @@ fn start_process(spec: &ModuleSpec) -> Result<Child, Error> {
     if let Some(args) = settings.args() {
         cmd.args(args);
     }
-    // if let Some(user) = settings.user() {
-    //     //look up userid or convert to int.
-    //     cmd.user(user);
-    // }
-    // if let Some(group) = settings.group() {
-    //     //look up userid or convert to int.
-    //     cmd.group(group);
-    // }
-
+    if let Some(user) = lookup_uid(settings.user()) {
+        println!("Running as uid: {}", user);
+        cmd.uid(user);
+    }
+    if let Some(group) = lookup_gid(settings.group()) {
+        println!("Running as gid: {}", group);
+        cmd.gid(group);
+    }
+    if let Some(envs) = spec.config().env() {
+        for env in envs {
+            cmd.env(env.key(), env.value());
+        }
+    }
     if let Some(stderr) = settings.stderr_log() {
         let file = File::create(stderr).map_err(|_| Error::from(ErrorKind::FileOpen))?;
         cmd.stderr(file);
@@ -76,7 +101,7 @@ pub async fn control_loop(
         // Get database entry for module.
         let spec: Result<ModuleSpec, _> = db
             .retrieve(&module_name)
-            .map_err(|err| Error::from(ErrorKind::DbRetrieve));
+            .map_err(|_err| Error::from(ErrorKind::DbRetrieve));
         if let Ok(spec) = spec {
             // fork, setup and exec process
             if None == spec.status().and_then(|status| status.pid()) {
@@ -120,11 +145,11 @@ pub async fn control_loop(
 
         // Wait on PID or channel update.
         match control_rx.try_recv() {
-            Ok(msg) => {
+            Ok(_msg) => {
                 println!("Module {} recoved a control message", module_name);
                 let spec: Result<ModuleSpec, _> = db
                     .retrieve(&module_name)
-                    .map_err(|err| Error::from(ErrorKind::DbRetrieve));
+                    .map_err(|_err| Error::from(ErrorKind::DbRetrieve));
                 if let Ok(spec) = spec {
                     kill_process(&spec);
                 }
@@ -137,7 +162,7 @@ pub async fn control_loop(
             Err(mpsc::error::TryRecvError::Empty) => {}
         };
 
-        time::delay_for(time::Duration::from_secs(1)).await;
+        time::delay_for(time::Duration::from_secs(2)).await;
     }
     response
         .send(ControlResponse::Stopped(module_name))

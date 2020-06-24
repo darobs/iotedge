@@ -14,6 +14,13 @@ impl EnvVar {
     pub fn new(key: String, value: String) -> Self {
         EnvVar { key, value }
     }
+
+    pub fn key(&self) -> &str {
+        self.key.as_str()
+    }
+    pub fn value(&self) -> &str {
+        self.value.as_str()
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -139,10 +146,6 @@ impl ModuleSpec {
     pub fn with_status(mut self, status: Status) -> Self {
         self.status = Some(status);
         self
-    }
-
-    pub fn name(&self) -> &String {
-        &self.name
     }
     pub fn config(&self) -> &Config {
         &self.config
