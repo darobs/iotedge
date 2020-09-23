@@ -3,13 +3,9 @@ namespace Microsoft.Azure.Devices.Edge.Agent.Service
 {
     using System;
     using Autofac;
-    using Autofac.Extensions.DependencyInjection;
     using Microsoft.AspNetCore.Builder;
     using Microsoft.AspNetCore.Hosting;
     using Microsoft.AspNetCore.Mvc;
-    using Microsoft.Azure.Devices.Client;
-    using Microsoft.Azure.Devices.Edge.Hub.Core;
-    using Microsoft.Azure.Devices.Edge.Hub.Http.Middleware;
     using Microsoft.Azure.Devices.Edge.Util;
     using Microsoft.Extensions.Configuration;
     using Microsoft.Extensions.DependencyInjection;
@@ -20,8 +16,7 @@ namespace Microsoft.Azure.Devices.Edge.Agent.Service
         readonly IConfigurationRoot configuration;
 
         // ReSharper disable once UnusedParameter.Local
-        public Startup(
-            IConfigurationRoot configuration)
+        public Startup(IConfigurationRoot configuration)
         {
             this.configuration = Preconditions.CheckNotNull(configuration, nameof(configuration));
         }
