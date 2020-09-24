@@ -333,9 +333,6 @@ namespace Microsoft.Azure.Devices.Edge.Agent.Service
             IStreamRequestListener streamRequestListener = await container.Resolve<Task<IStreamRequestListener>>();
             streamRequestListener.InitPump();
 
-            // Initialize ASP.net host
-            Hosting hosting = Hosting.Initialize(configuration, certificates.ServerCertificate, dependencyManager, clientCertAuthEnabled, sslProtocols);
-
             int returnCode;
             using (IConfigSource unused = await container.Resolve<Task<IConfigSource>>())
             {
